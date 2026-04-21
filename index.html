@@ -1282,7 +1282,7 @@
   </div>
 
   <div class="nav-section">Visão geral</div>
-  <div class="nav-item active" onclick="nav('overview', this)"><span class="icon">⚡</span> Overview</div>
+  <div class="nav-item active" onclick="nav('overview', this)"><span class="icon">⚡</span> Treino do Dia</div>
   <div class="nav-item" onclick="nav('progressao', this)"><span class="icon">📈</span> Progressão</div>
   <div class="nav-item" onclick="openRegistro()" style="background:rgba(232,255,71,0.07);border:1px solid rgba(232,255,71,0.2);color:var(--accent)"><span class="icon">➕</span> Registrar Treino</div>
 
@@ -1295,20 +1295,11 @@
 
 
 
-  <div class="meso-widget">
+  <div class="meso-widget" id="meso-widget">
     <div class="meso-label">Semana atual</div>
-    <div class="meso-week">SEM 7</div>
-    <div class="meso-desc">Meso 2 · Volume acumulado</div>
-    <div class="week-dots">
-      <div class="week-dot done"></div>
-      <div class="week-dot done"></div>
-      <div class="week-dot done"></div>
-      <div class="week-dot done"></div>
-      <div class="week-dot done"></div>
-      <div class="week-dot done"></div>
-      <div class="week-dot active"></div>
-      <div class="week-dot"></div>
-    </div>
+    <div class="meso-week" id="sidebar-week-label">—</div>
+    <div class="meso-desc" id="sidebar-meso-desc">—</div>
+    <div class="week-dots" id="sidebar-week-dots"></div>
   </div>
 </aside>
 
@@ -3809,6 +3800,61 @@ function buildLiveExBlock(panel, exName, currentWeek, ex) {
   </div>`;
 }
 
+// ── Sidebar week widget (dynamic) ────────────────────────────────────────────
+function updateSidebarWidget(currentWeek) {
+  const meso       = Math.ceil(currentWeek / 4);
+  const semInMeso  = ((currentWeek - 1) % 4) + 1;
+  const phase      = getPhase(currentWeek);
+  const phaseLabel = phaseNames[phase];
+
+  const lbl  = document.getElementById('sidebar-week-label');
+  const desc = document.getElementById('sidebar-meso-desc');
+  const dots = document.getElementById('sidebar-week-dots');
+  if (lbl)  lbl.textContent  = `SEM ${currentWeek}`;
+  if (desc) desc.textContent = `Meso ${meso} · ${phaseLabel}`;
+  if (dots) {
+    // 4 dots for 4 weeks in the meso, filled up to current sem
+    dots.innerHTML = [1,2,3,4].map(i => {
+      const cls = i < semInMeso ? 'done' : i === semInMeso ? 'active' : '';
+      return `<div class="week-dot ${cls}"></div>`;
+    }).join('');
+  }
+}
+
+// ── Determine which workout is pending (not yet done or skipped) ─────────────
+// Order: pull(Mon), push(Tue), legs(Wed), upper(Fri), charm(Sat)
+const WORKOUT_ORDER = ['pull','push','legs','upper','charm'];
+
+function isPanelDoneForWeek(panel, week) {
+  // Check committed workouts first
+  const committed = getStoredWorkouts().find(w => w.type === panel && w.week === week);
+  if (committed) {
+    // Done if any exercise has a carga OR is explicitly skipped/SF
+    return committed.exercises.every(e =>
+      e.carga !== null || e.status === 'skip' || e.status === 'sf'
+    );
+  }
+  // Check live draft
+  const draft = getLiveDraft();
+  if (draft && draft.panel === panel && draft.week === week) {
+    return draft.exercises.every(e =>
+      (e.carga && e.carga !== '') || e.status === 'skip' || e.status === 'sf'
+    );
+  }
+  return false;
+}
+
+function getPendingWorkout(currentWeek) {
+  // Find the first panel in order that hasn't been done this week
+  for (const panel of WORKOUT_ORDER) {
+    if (!isPanelDoneForWeek(panel, currentWeek)) {
+      return panel;
+    }
+  }
+  // All done this week — return null (rest day or week complete)
+  return null;
+}
+
 function renderOverview() {
   const today  = new Date();
   const dow    = today.getDay();
@@ -3821,7 +3867,9 @@ function renderOverview() {
   const semInMeso = ((currentWeek-1)%4)+1;
 
   const dayNames = ['Domingo','Segunda','Terça','Quarta','Quinta','Sexta','Sábado'];
-  const todayPanel = todayWorkoutMap[dow];
+
+  // Update sidebar widget
+  updateSidebarWidget(currentWeek);
 
   // Top bar
   const dayEl   = document.getElementById('ov-today-name');
@@ -3846,33 +3894,43 @@ function renderOverview() {
   const actionEl = document.getElementById('live-action-bar');
   if (!tableEl) return;
 
-  if (!todayPanel) {
-    if (titleEl)  titleEl.textContent = 'Descanso';
-    if (dotEl)    dotEl.style.color = 'var(--muted)';
+  // ── Find the pending workout (not done yet this week) ──────────────────────
+  const pendingPanel = getPendingWorkout(currentWeek);
+
+  if (!pendingPanel) {
+    // All workouts done this week
+    if (titleEl)  titleEl.textContent = 'Semana Concluída';
+    if (dotEl)    dotEl.style.color = '#00ff88';
     if (actionEl) actionEl.style.display = 'none';
-    tableEl.innerHTML = `<div class="ov-rest-msg">— DESCANSO —<span>Recuperação ativa · sem treino hoje</span></div>`;
+    tableEl.innerHTML = `<div class="ov-rest-msg">— SEMANA COMPLETA —<span>Todos os treinos desta semana foram realizados 🎉</span></div>`;
     return;
   }
 
-  if (titleEl)  titleEl.textContent = panelLabels[todayPanel].toUpperCase();
-  if (dotEl)    dotEl.style.color = '#00ff88';
+  // Show which day this workout belongs to and whether it's today or pending
+  const scheduledDow = Object.entries(todayWorkoutMap).find(([d,p]) => p === pendingPanel)?.[0];
+  const scheduledDay = scheduledDow !== undefined ? dayNames[parseInt(scheduledDow)] : '';
+  const isToday      = parseInt(scheduledDow) === dow;
+  const pendingLabel = isToday
+    ? `${panelLabels[pendingPanel]} — hoje`
+    : `${panelLabels[pendingPanel]} — pendente (${scheduledDay})`;
+
+  if (titleEl)  titleEl.textContent = pendingLabel.toUpperCase();
+  if (dotEl)    dotEl.style.color = isToday ? '#00ff88' : '#e8ff47';
   if (actionEl) actionEl.style.display = 'flex';
 
-  const exercises = woExercises[todayPanel] || [];
+  const exercises = woExercises[pendingPanel] || [];
   const todayStr  = new Date().toISOString().split('T')[0];
 
-  // Load or init draft for today
+  // Load or init draft — keyed by panel+week (not date, so it persists)
   let draft = getLiveDraft();
   const draftStale = !draft
-    || draft.panel !== todayPanel
-    || draft.week  !== currentWeek
-    || draft.date  !== todayStr;
+    || draft.panel !== pendingPanel
+    || draft.week  !== currentWeek;
 
   if (draftStale) {
-    // Try to seed from existing committed workout
-    const committed = getStoredWorkouts().find(w => w.type === todayPanel && w.week === currentWeek);
+    const committed = getStoredWorkouts().find(w => w.type === pendingPanel && w.week === currentWeek);
     draft = {
-      panel: todayPanel,
+      panel: pendingPanel,
       week:  currentWeek,
       date:  todayStr,
       exercises: exercises.map(exName => {
@@ -3892,7 +3950,7 @@ function renderOverview() {
 
   // Render exercise blocks
   tableEl.innerHTML = draft.exercises
-    .map(ex => buildLiveExBlock(todayPanel, ex.name, currentWeek, ex))
+    .map(ex => buildLiveExBlock(pendingPanel, ex.name, currentWeek, ex))
     .join('');
 }
 
@@ -5004,12 +5062,12 @@ function saveWorkoutMobile() {
 // Console → Configurações do projeto → Seus apps → SDK
 //
 const FIREBASE_CONFIG = {
-  apiKey:            "AIzaSyCQ71aFBC_czzHvnRMOoeL6dZNLe2GzP0Y",
-  authDomain:        "fitsync-a4e63.firebaseapp.com",
-  projectId:         "fitsync-a4e63",
-  storageBucket:     "fitsync-a4e63.firebasestorage.app",
-  messagingSenderId: "799426893648",
-  appId:             "1:799426893648:web:888931c8ca12244bdbbe55",
+  apiKey:            "COLE_AQUI",
+  authDomain:        "COLE_AQUI",
+  projectId:         "COLE_AQUI",
+  storageBucket:     "COLE_AQUI",
+  messagingSenderId: "COLE_AQUI",
+  appId:             "COLE_AQUI",
 };
 
 const SYNC_USER_ID = 'kendji';   // ID único do usuário (sem autenticação — muda se usar vários usuários)
