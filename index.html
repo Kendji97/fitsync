@@ -4052,18 +4052,34 @@ function liveClear() {
 }
 
 // ======= RENDER WEEK TABLE =======
-function renderWeekTable(data, containerId) {
+function renderWeekTable(data, containerId, panel, week) {
   if (!data) { document.getElementById(containerId).innerHTML = ''; return; }
 
   function fmtVal(val) {
     if (!val || val === '') return `<span style="color:var(--muted)">—</span>`;
     if (val === 'X')  return `<span style="color:var(--muted);font-style:italic">— pulado</span>`;
     if (val === 'SF') return `<span style="color:var(--muted);font-style:italic">— SmartFit</span>`;
-    // PC anywhere in val = peso corporal
     const displayed = val.replace(/\bPC\b/g,
       `<span style="color:#47c8ff;font-size:0.72rem;font-weight:600;letter-spacing:0.04em">PC</span>`);
     return `<span style="color:var(--text)">${displayed}</span>`;
   }
+
+  // Check if this week was user-registered (exists in localStorage)
+  const isUserSaved = panel && week && getStoredWorkouts()
+    .some(w => w.type === panel && w.week === week);
+
+  const deleteBtn = isUserSaved ? `
+    <div style="display:flex;justify-content:flex-end;padding:0.5rem 0 0.2rem">
+      <button onclick="deleteWorkout('${panel}',${week})"
+        style="font-size:0.65rem;font-family:'IBM Plex Mono',monospace;
+               letter-spacing:0.08em;padding:0.3em 0.8em;border-radius:6px;
+               background:rgba(220,38,38,0.1);border:1px solid rgba(220,38,38,0.3);
+               color:#f87171;cursor:pointer;transition:all 0.15s"
+        onmouseover="this.style.background='rgba(220,38,38,0.2)'"
+        onmouseout="this.style.background='rgba(220,38,38,0.1)'">
+        🗑 Apagar treino registrado
+      </button>
+    </div>` : '';
 
   const html = `<table class="data-table">
     <thead><tr><th>Exercício</th><th>Registro</th></tr></thead>
@@ -4073,8 +4089,38 @@ function renderWeekTable(data, containerId) {
         <td style="font-size:0.82rem">${fmtVal(r.val)}</td>
       </tr>`).join('')}
     </tbody>
-  </table>`;
+  </table>${deleteBtn}`;
   document.getElementById(containerId).innerHTML = html;
+}
+
+function deleteWorkout(panel, week) {
+  if (!confirm(`Apagar o registro de ${panel.toUpperCase()} Semana ${week}? Os dados estáticos do histórico serão mantidos.`)) return;
+
+  // Remove from localStorage
+  let workouts = getStoredWorkouts();
+  workouts = workouts.filter(w => !(w.type === panel && w.week === week));
+  _applyingRemote = true;
+  _origLocalSet(STORAGE_KEY, JSON.stringify(workouts));
+  _applyingRemote = false;
+
+  // Remove from Firestore
+  if (_db) {
+    _db.collection('users').doc(SYNC_USER_ID)
+       .collection('workouts').doc(`${panel}_${week}`)
+       .delete().catch(e => console.error('[FitSync] delete error:', e));
+  }
+
+  // Remove from in-memory panel data (revert to static) by rebuilding
+  // Re-run hydrateFromStorage to reconstruct from remaining workouts
+  const dataStore = {pull:pullData,push:pushData,legs:legsData,upper:upperData,charm:charmData};
+  // Clear the week entry so it reverts to static data
+  delete dataStore[panel][week];
+
+  hydrateFromStorage();
+  buildWeekTabs(panel);
+  renderAllSuggestions();
+  renderOverview();
+  showToast(`✓ Registro de ${panel.toUpperCase()} Sem ${week} apagado`);
 }
 
 function setActiveTabs(tabGroup, activeBtn) {
@@ -4119,7 +4165,7 @@ function showWeek(panel, n, btn) {
   if (tabsEl && btn) setActiveTabs(tabsEl, btn);
   const dataMap = { pull:pullData, push:pushData, legs:legsData, upper:upperData, charm:charmData };
   const contentId = `${panel}-week-content`;
-  renderWeekTable((dataMap[panel] || {})[n], contentId);
+  renderWeekTable((dataMap[panel] || {})[n], contentId, panel, n);
 }
 
 function showPullWeek(n, btn)  { showWeek('pull',  n, btn); }
