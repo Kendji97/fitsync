@@ -5172,14 +5172,17 @@ let _applyingRemote = false;  // flag para evitar loop de escrita
 
 function startRealtimeListeners() {
   if (!_syncReady) return;
+  console.log('[FitSync] Iniciando listeners...');
 
   // Workouts
   _unsubWorkouts = docRef('workouts').onSnapshot(snap => {
+    console.log('[FitSync] onSnapshot workouts — docs:', snap.size, 'empty:', snap.empty);
     if (snap.empty) return;
-    const remoteWorkouts = snap.docs.map(d => d.data());
+    const remoteWorkouts = snap.docs.map(d => { console.log('[FitSync] doc:', d.id, d.data()?.type, 'week:', d.data()?.week); return d.data(); });
 
-    // Merge: remote sempre vence para cada documento existente no Firestore
     const local  = getStoredWorkouts();
+    console.log('[FitSync] local workouts:', local.length, '→ remote:', remoteWorkouts.length);
+
     const merged = [...local];
     remoteWorkouts.forEach(rw => {
       const idx = merged.findIndex(lw => lw.type === rw.type && lw.week === rw.week);
@@ -5187,19 +5190,18 @@ function startRealtimeListeners() {
       else merged.push(rw);
     });
 
-    // Salva sem disparar o patch do Firestore (evita loop)
     _applyingRemote = true;
     _origLocalSet(STORAGE_KEY, JSON.stringify(merged));
     _applyingRemote = false;
 
-    // Atualiza UI
     hydrateFromStorage();
     renderAllSuggestions();
     renderOverview();
     setSyncBadge('synced');
+    console.log('[FitSync] UI atualizada com', merged.length, 'workouts');
 
   }, (err) => {
-    console.error('[FitSync] Listener erro:', err);
+    console.error('[FitSync] Listener erro:', err.code, err.message);
     setSyncBadge('offline');
   });
 
