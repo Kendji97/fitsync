@@ -5168,15 +5168,18 @@ async function syncDelete(collection, id) {
 }
 
 // ── READ: escuta mudanças em tempo real e atualiza localStorage + UI ──────
+let _applyingRemote = false;  // flag para evitar loop de escrita
+
 function startRealtimeListeners() {
   if (!_syncReady) return;
 
   // Workouts
   _unsubWorkouts = docRef('workouts').onSnapshot(snap => {
+    if (snap.empty) return;
     const remoteWorkouts = snap.docs.map(d => d.data());
-    const local = getStoredWorkouts();
 
-    // Merge: remote wins (last-write-wins por documento)
+    // Merge: remote sempre vence para cada documento existente no Firestore
+    const local  = getStoredWorkouts();
     const merged = [...local];
     remoteWorkouts.forEach(rw => {
       const idx = merged.findIndex(lw => lw.type === rw.type && lw.week === rw.week);
@@ -5184,32 +5187,36 @@ function startRealtimeListeners() {
       else merged.push(rw);
     });
 
-    const localStr  = JSON.stringify(local.sort((a,b) => a.id - b.id));
-    const mergedStr = JSON.stringify(merged.sort((a,b) => a.id - b.id));
-    if (localStr !== mergedStr) {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(merged));
-      hydrateFromStorage();
-      renderAllSuggestions();
-      renderOverview();
-      setSyncBadge('synced');
-    }
-  }, () => setSyncBadge('offline'));
+    // Salva sem disparar o patch do Firestore (evita loop)
+    _applyingRemote = true;
+    _origLocalSet(STORAGE_KEY, JSON.stringify(merged));
+    _applyingRemote = false;
+
+    // Atualiza UI
+    hydrateFromStorage();
+    renderAllSuggestions();
+    renderOverview();
+    setSyncBadge('synced');
+
+  }, (err) => {
+    console.error('[FitSync] Listener erro:', err);
+    setSyncBadge('offline');
+  });
 
   // Runs
   _unsubRuns = docRef('runs').onSnapshot(snap => {
+    if (snap.empty) return;
     const remoteRuns = snap.docs.map(d => d.data());
-    const local = getStoredRuns();
+    const local  = getStoredRuns();
     const merged = [...local];
     remoteRuns.forEach(r => {
       const idx = merged.findIndex(l => l.id === r.id);
       if (idx >= 0) merged[idx] = r;
       else merged.push(r);
     });
-    const localStr  = JSON.stringify(local);
-    const mergedStr = JSON.stringify(merged);
-    if (localStr !== mergedStr) {
-      localStorage.setItem(RUN_STORAGE_KEY, JSON.stringify(merged));
-    }
+    _applyingRemote = true;
+    _origLocalSet(RUN_STORAGE_KEY, JSON.stringify(merged));
+    _applyingRemote = false;
   }, () => {});
 
   // Live draft
@@ -5237,7 +5244,8 @@ const _origLocalSet = localStorage.setItem.bind(localStorage);
 localStorage.setItem = function(key, value) {
   _origLocalSet(key, value);
 
-  if (!_syncReady) return;
+  // Don't push back to Firestore if we're currently applying remote data
+  if (!_syncReady || _applyingRemote) return;
 
   if (key === STORAGE_KEY) {
     // Push all workouts
