@@ -2919,6 +2919,45 @@ function renderAllSuggestions() {
 
 const STORAGE_KEY = 'treino2026_registros';
 
+// ── Patch localStorage.setItem para sincronizar com Firestore ────────────────
+// Definido aqui (antes do Firebase init) para capturar todos os saves
+const _origLocalSet = localStorage.setItem.bind(localStorage);
+let _applyingRemote = false;
+
+localStorage.setItem = function(key, value) {
+  _origLocalSet(key, value);
+  if (_applyingRemote) return;  // evita loop ao aplicar dados remotos
+  if (!_db) return;             // Firebase ainda não inicializado
+
+  if (key === STORAGE_KEY) {
+    try {
+      JSON.parse(value).forEach(wo => {
+        _db.collection('users').doc(SYNC_USER_ID)
+           .collection('workouts').doc(`${wo.type}_${wo.week}`)
+           .set(wo).catch(e => console.error('[FitSync] write error:', e));
+      });
+    } catch(e) { console.error('[FitSync] parse error:', e); }
+
+  } else if (key === RUN_STORAGE_KEY) {
+    try {
+      JSON.parse(value).forEach(r => {
+        _db.collection('users').doc(SYNC_USER_ID)
+           .collection('runs').doc(String(r.id))
+           .set(r).catch(() => {});
+      });
+    } catch {}
+
+  } else if (key === LIVE_KEY) {
+    try {
+      const draft = JSON.parse(value);
+      draft._ts = Date.now();
+      _db.collection('users').doc(SYNC_USER_ID)
+         .collection('live').doc('draft')
+         .set(draft).catch(() => {});
+    } catch {}
+  }
+};
+
 // Exercise definitions per workout type
 const woExercises = {
   pull:  ['Barra fixa','Puxada fechada','Puxada unilateral','Remada curvada','Remada baixa','Face pull','Rosca direta'],
@@ -5171,7 +5210,6 @@ async function syncDelete(collection, id) {
 }
 
 // ── READ: escuta mudanças em tempo real e atualiza localStorage + UI ──────
-let _applyingRemote = false;  // flag para evitar loop de escrita
 
 function startRealtimeListeners() {
   if (!_syncReady) return;
@@ -5242,41 +5280,7 @@ function startRealtimeListeners() {
 }
 
 // ── Patch: intercept storage writes to also push to Firestore ─────────────
-const _origSaveWorkout_sync = saveWorkout;
-// We patch at the localStorage.setItem level instead — safer
 
-const _origLocalSet = localStorage.setItem.bind(localStorage);
-localStorage.setItem = function(key, value) {
-  _origLocalSet(key, value);
-
-  // Don't push back to Firestore if we're currently applying remote data
-  if (!_syncReady || _applyingRemote) return;
-
-  if (key === STORAGE_KEY) {
-    // Push all workouts
-    try {
-      const workouts = JSON.parse(value);
-      workouts.forEach(wo => {
-        syncPush('workouts', `${wo.type}_${wo.week}`, wo);
-      });
-    } catch {}
-
-  } else if (key === RUN_STORAGE_KEY) {
-    try {
-      const runs = JSON.parse(value);
-      runs.forEach(r => syncPush('runs', r.id, r));
-    } catch {}
-
-  } else if (key === LIVE_KEY) {
-    try {
-      const draft = JSON.parse(value);
-      draft._ts = Date.now();
-      _db.collection('users').doc(SYNC_USER_ID)
-        .collection('live').doc('draft')
-        .set(draft).catch(() => {});
-    } catch {}
-  }
-};
 
 const _origLocalRemove = localStorage.removeItem.bind(localStorage);
 localStorage.removeItem = function(key) {
