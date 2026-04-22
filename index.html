@@ -1254,7 +1254,10 @@
       <rect x="28" y="4" width="5" height="20" rx="2" fill="#00ff88"/>
       <rect x="33" y="7" width="7" height="14" rx="2.5" fill="#00ff88"/>
     </svg>
-    <span class="mobile-header-name">FitSync</span>
+    <div>
+      <span class="mobile-header-name">FitSync</span>
+      <div id="sync-badge-mobile" style="font-size:0.52rem;letter-spacing:0.06em;font-family:'IBM Plex Mono',monospace;color:var(--muted);line-height:1;margin-top:2px">○ local</div>
+    </div>
   </div>
   <span class="mobile-header-week" id="mobile-header-week">—</span>
 </header>
@@ -5089,9 +5092,6 @@ let _unsubLive     = null;
 
 // Badge de status de sync no topo do app
 function setSyncBadge(state) {
-  // state: 'syncing' | 'synced' | 'offline' | 'error' | 'disabled'
-  let el = document.getElementById('sync-badge');
-  if (!el) return;
   const map = {
     syncing:  { text: '↻ sincronizando', color: '#e8ff47' },
     synced:   { text: '✓ sincronizado',  color: '#00ff88' },
@@ -5100,12 +5100,17 @@ function setSyncBadge(state) {
     disabled: { text: '○ local',          color: 'var(--muted)' },
   };
   const s = map[state] || map.disabled;
-  el.textContent    = s.text;
-  el.style.color    = s.color;
-  el.style.opacity  = '1';
-  if (state === 'synced') {
-    setTimeout(() => { if (el) el.style.opacity = '0.4'; }, 3000);
-  }
+
+  ['sync-badge', 'sync-badge-mobile'].forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.textContent   = s.text;
+    el.style.color   = s.color;
+    el.style.opacity = '1';
+    if (state === 'synced') {
+      setTimeout(() => { if (el) el.style.opacity = '0.4'; }, 3000);
+    }
+  });
 }
 
 function initFirebase() {
@@ -5116,7 +5121,15 @@ function initFirebase() {
   try {
     if (!firebase.apps.length) firebase.initializeApp(FIREBASE_CONFIG);
     _db = firebase.firestore();
-    _db.enablePersistence({ synchronizeTabs: true }).catch(() => {});  // offline support
+
+    // Persistence é opcional — falha silenciosa no mobile não deve bloquear sync
+    _db.enablePersistence({ synchronizeTabs: true })
+      .catch(err => {
+        console.warn('[FitSync] Persistence não disponível:', err.code);
+        // Continua mesmo sem persistence
+      });
+
+    // Marca como pronto ANTES de esperar persistence
     _syncReady = true;
     setSyncBadge('synced');
     startRealtimeListeners();
